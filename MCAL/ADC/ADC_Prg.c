@@ -1,0 +1,132 @@
+#include "StdTypes.h"
+#include "MemMap.h"
+#include "ADC_Int.h"
+#include "ADC_Private.h"
+#include "ADC_Cfg.h"
+
+static u8	ConversionFlag;
+static void(*ADC_Fptr)(void)=NULLPTR;
+void ADC_Init(ADC_VREF_t vref,ADC_Prescaler_t scaler)
+{
+	
+	/*vref*/
+	switch(vref)
+	{
+		case VREF_AREF:
+		CLR_BIT(ADMUX,REFS0);
+		CLR_BIT(ADMUX,REFS1);
+		break;
+		case VREF_VCC:
+		SET_BIT(ADMUX,REFS0);
+		CLR_BIT(ADMUX,REFS1);
+		break;
+		case VREF_256:
+		SET_BIT(ADMUX,REFS0);
+		SET_BIT(ADMUX,REFS1);
+		break;
+	}
+	/*prescaler*/
+	ADCSRA=ADCSRA&0xf8;
+	ADCSRA=ADCSRA|scaler;
+	/*enable ADC*/
+	SET_BIT(ADCSRA,ADEN);
+	CLR_BIT(ADMUX,ADLAR);
+	CLR_BIT(ADCSRA,ADATE);
+}
+u16 ADC_Read(ADC_Channel_t ch)
+{
+	/*select channel*/
+	ADMUX = (ADMUX & 0xE0) | (ch & 0x07);
+	/*start conversion*/
+	SET_BIT(ADCSRA,ADSC);
+	/*wait until conversion end*/
+	//_delay_us(1); OR
+	while(GET_BIT(ADCSRA,ADSC));
+	/*get read*/
+	return ADC;
+}
+u16 ADC_ReadVolt(ADC_Channel_t ch)
+{
+	u16 adc=ADC_Read(ch);
+	u16 volt;
+	volt=((u32)ADC_REF_MV*adc)/1023;// if 1023 max volt will be 5000
+	return volt;
+}
+error_t ADC_StartConversion(ADC_Channel_t ch)
+{
+	error_t status = OK;
+
+	if (ch > CH_7)
+	{
+		status = OUT_OF_RANGE;
+	}
+	else if (ConversionFlag != 0u)
+	{
+		status = IN_PROGRESS;
+	}
+	else
+	{
+		ConversionFlag = 1u;
+
+		/* Select ADC channel */
+		ADMUX = (ADMUX & 0xE0u) | ((u8)ch & 0x07u);
+
+		/* Clear ADC interrupt flag by writing one to ADIF */
+		SET_BIT(ADCSRA, ADIF);
+
+		/* Start conversion */
+		SET_BIT(ADCSRA, ADSC);
+
+		status = OK;
+	}
+
+	return status;
+}
+u16 ADC_GetRead(void)
+{
+	/*wait until conversion end*/
+	//_delay_us(1); OR
+	while(GET_BIT(ADCSRA,ADSC));
+	ConversionFlag=0;
+	/*get read*/
+	return ADC;
+}
+error_t ADC_GetReadPeriodic(u16*pdata)
+{
+	error_t r=OK;
+	if(!GET_BIT(ADCSRA,ADSC))
+	{
+		*pdata=ADC;
+		ConversionFlag=0;
+	}
+	else
+	{
+		r=IN_PROGRESS;
+	}
+	return r;
+}
+u16 ADC_GetReadNoBlock(void)
+{
+	return ADC;
+}
+void ADC_InterruptEnable(void)
+{
+	SET_BIT(ADCSRA,ADIE);
+}
+
+void ADC_SetCallBack(void (*LocalFptr)(void))
+{
+	ADC_Fptr = LocalFptr;
+}
+ISR(ADC_vect)
+{
+	if (ADC_Fptr!=NULLPTR)
+	{
+		ADC_Fptr();
+	}
+	ConversionFlag=0;
+}
+void ADC_InterruptDisable(void)
+{
+	CLR_BIT(ADCSRA,ADIE);
+}
